@@ -1,0 +1,269 @@
+#include <stdbool.h>
+#include <string.h>
+#include "Simon.h"
+const uint32_t SwitchCount = 2;
+const uint32_t ButtonCount = 2;
+const uint32_t Switches[SwitchCount] = { PA_7, PA_6 };
+const uint32_t Buttons[ButtonCount] = { PD_2, PE_0 };
+const uint32_t Potentiometer = PE_3;
+// To do: accelerometer, potentiometer
+// Bugs:
+// - Sometimes says input is wrong when it is right (very rarely - not sure why)
+bool isFirstTime = true;
+bool gameWin;
+long timePassed;
+
+static enum GamePages
+{
+  Launch = 0,
+  NullPage = 1,
+  GameOverPage = 2,
+  GameStartPage = 3,
+  GameInputPage = 4,
+  ReturnPage = 5,
+  numpages = 6,
+} gameUiPage = Launch;
+
+struct ButtonState
+{
+  bool state;
+  bool isRising;
+};
+
+struct InputState
+{
+  bool switches[2];
+  struct ButtonState buttons[2];
+  float potentiometer;
+};
+static struct InputState gameInputState;
+
+void GameUIInit() {
+  OrbitOledInit();
+  OrbitOledClear();
+  OrbitOledClearBuffer();
+  OrbitOledSetFillPattern(OrbitOledGetStdPattern(iptnSolid));
+  OrbitOledSetDrawMode(modOledSet);
+  gameInputState = { 0 };
+  for (int i = 0; i < SwitchCount; ++i )
+    pinMode(Switches[i], INPUT);
+  for (int i = 0; i < ButtonCount; ++i )
+    pinMode(Buttons[i], INPUT);
+}
+
+static void drawLaunchPage() {
+  isFirstTime = true;
+  gameWin = false;
+  OrbitOledMoveTo(7, 2);
+  OrbitOledDrawString("TJ's & Justin's");
+  OrbitOledMoveTo(21, 12);
+  OrbitOledDrawString("Memory Game");
+  OrbitOledMoveTo(26, 24);
+  OrbitOledDrawString("BTN1 to start");
+  Simon.sequenceLength = 1;
+  if (gameInputState.buttons[0].isRising) {
+    OrbitOledClearBuffer();
+    OrbitOledClear();
+    gameUiPage = GameStartPage;
+  }
+}
+
+static void drawReturnPage() {
+  OrbitOledMoveTo(8, 2);
+  OrbitOledDrawString("TY For Playing!");
+  OrbitOledMoveTo(30, 14);
+  OrbitOledDrawString("press BTN1");
+  OrbitOledMoveTo(32, 24);
+  OrbitOledDrawString("to return");
+  if (gameInputState.buttons[0].isRising) {
+    OrbitOledClearBuffer();
+    OrbitOledClear();
+    gameInit();
+    gameUiPage = Launch;
+  }
+}
+
+static void drawGameOverPage() {
+  char score[2];
+  sprintf(score, "%d", Simon.sequenceLength - 1);
+  if (isFirstTime) {
+    timePassed = 0;
+    isFirstTime = false;
+  }
+  OrbitOledMoveTo(30, 8);
+  if (!gameWin) {
+    OrbitOledDrawString("Game Over!");
+    RbgLedFlash(0, 200);
+  } else {
+    OrbitOledDrawString("You Win!");
+    RbgLedFlash(2, 200);
+  }
+  OrbitOledMoveTo(18, 21);
+  OrbitOledDrawString("High Score: ");
+  OrbitOledMoveTo(105, 21);
+  OrbitOledDrawString(score);
+  if (timePassed > 3000) {
+    OrbitOledClearBuffer();
+    OrbitOledClear();
+    gameUiPage = ReturnPage;
+  }
+  timePassed++;
+}
+
+static void drawGameStartPage() {
+  OrbitOledMoveTo(7, 2);
+  OrbitOledDrawString("Repeat This");
+  OrbitOledUpdate();
+  delay (1500);
+  OrbitOledClear();
+  for (int i = 0; i < Simon.sequenceLength; i++) {
+    OrbitOledMoveTo(7, 2);
+    switch (Simon.sequence[i])
+    {
+      case 0:
+        OrbitOledDrawString("Turn the DIAL");
+        break;
+      case 1:
+        OrbitOledDrawString("Press BTN 1");
+        break;
+      case 2:
+        OrbitOledDrawString("Press BTN 2");
+        break;
+      case 3:
+        OrbitOledDrawString("Flip SWTCH 1");
+        break;
+      case 4:
+        OrbitOledDrawString("Flip SWTCH 2");
+        break;
+    }
+    OrbitOledUpdate();
+    delay (1000);
+    OrbitOledClear();
+    delay (200);
+  }
+  gameUiPage = GameInputPage;
+}
+
+static int inputStateChange(struct InputState prev) {
+  readInputs();
+  //checking current button/switch state against previous
+  for (int i = 0; i < ButtonCount; i++) {
+    if (gameInputState.buttons[i].isRising) {
+      return i + 1;
+    }
+  }
+  for (int i = 0; i < SwitchCount; i++) {
+    if (prev.switches[i] != gameInputState.switches[i]) {
+      return i + ButtonCount + 1;
+    }
+  }
+  //checking potentiometer turning, must turn all the way to one side
+  if (prev.potentiometer > 80 && prev.potentiometer < 4000){
+    if (gameInputState.potentiometer >=4000 || gameInputState.potentiometer <=80) return 0;
+  }
+  if (prev.potentiometer <= 80 && gameInputState.potentiometer >=4000){
+    return 0;
+  }
+  if (prev.potentiometer >= 4000 && gameInputState.potentiometer <= 80){
+    return 0;
+  }
+  return -1;
+}
+
+static void drawGameInputPage() {
+  OrbitOledMoveTo(7, 2);
+  OrbitOledDrawString("Your turn!");
+  OrbitOledUpdate();
+  allLedOff();
+  bool isValid = true;
+  //iterates over each sequence term
+  for (int i = 0; i < Simon.sequenceLength; i++) {
+    if (!isValid) break;
+    struct InputState prevState;
+    prevState = gameInputState;
+    Serial.println(prevState.switches[0]);
+    Serial.println(prevState.switches[1]);
+    //checking for correct or incorrect input
+    //continues to loop while board state has not changed
+    for (;;) {
+      int input = inputStateChange(prevState);
+      if (input == -1) continue;//skip bottom code if no state change
+      if (Simon.sequence[i] == input) {
+        Serial.println("Correct Input!");
+        RbgOn(2);
+        break;
+      } else {
+        isValid = false;
+        Serial.println("Incorrect Input!");
+        RbgOn(0);
+        break;
+      }
+    }
+    delay(400);
+    allLedOff();
+  }
+  if (Simon.sequenceLength >= 50) {
+    OrbitOledClear();
+    isValid ? gameWin = true : gameWin = false;
+    drawGameOverPage();
+    gameUiPage = GameOverPage;
+    return;
+  }
+  if (isValid) {
+    Simon.sequenceLength++;
+    if (isValid) {
+      //RbgLedFlash(2, 500);
+      delay(200);
+      allLedOff();
+    }
+    gameUiPage = GameStartPage;
+    OrbitOledClear();
+  }
+  else {
+    OrbitOledClear();
+    gameWin = false;
+    drawGameOverPage();
+    gameUiPage = GameOverPage;
+  }
+}
+static void readInputs()
+{
+  for (int i = 0; i < SwitchCount; ++i )
+    gameInputState.switches[i] = digitalRead(Switches[i]);
+  for (int i = 0; i < ButtonCount; ++i )
+  {
+    // Only look for Rising Edge Signals.
+    bool previousState = gameInputState.buttons[i].state;
+    gameInputState.buttons[i].state = digitalRead(Buttons[i]);
+    gameInputState.buttons[i].isRising = (!previousState && gameInputState.buttons[i].state);
+  }
+  gameInputState.potentiometer = analogRead(Potentiometer);
+}
+
+void updateGameUI()
+{
+  readInputs();
+  switch (gameUiPage)
+  {
+    case Launch:
+      drawLaunchPage();
+      OrbitLedFlash();
+      break;
+    case GameStartPage:
+      drawGameStartPage();
+      break;
+    case GameInputPage:
+      drawGameInputPage();
+      break;
+    case GameOverPage:
+      drawGameOverPage();
+      break;
+    case NullPage:
+      break;
+    case ReturnPage:
+      allLedOff();
+      drawReturnPage();
+      break;
+  }
+  OrbitOledUpdate();
+}
