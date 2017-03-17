@@ -3,7 +3,9 @@
 
 
 This is a mini memory game created for the Tiva C Series LaunchPad and the Diligent Orbit Booster Pack. 
+
 In this project, we used the microcontroller and the booster pack to imitate a hand-held gaming console.
+
 The game was developed using the Arduino IDE with C. 
 
 
